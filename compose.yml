@@ -1,0 +1,43 @@
+services:
+  sms-gateway:
+    build:
+      context: .
+      args:
+        DIALOUT_GID: ${DIALOUT_GID:-20}
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_PATH: /data/gateway.sqlite3
+      MODEM_DEVICE: ${MODEM_DEVICE:-/dev/huawei-e3272-sms}
+      GAMMU_CONFIG: /opt/sms-gateway/config/gammu-smsdrc
+      GAMMU_INBOX_PATH: /data/gammu/inbox
+      GAMMU_ARCHIVE_PATH: /data/gammu/processed
+      HTTP_PROXY_URL: ${HTTP_PROXY_URL:-}
+      HTTPS_PROXY_URL: ${HTTPS_PROXY_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      VK_TOKEN: ${VK_TOKEN:-}
+      VK_PEER_ID: ${VK_PEER_ID:-}
+      MODEM_REREGISTRATION_ENABLED: ${MODEM_REREGISTRATION_ENABLED:-false}
+      GATEWAY_DEVELOPMENT_MODE: ${GATEWAY_DEVELOPMENT_MODE:-false}
+    devices:
+      # Docker must receive the real host tty, not a host symlink mapped to itself.
+      - "${MODEM_HOST_DEVICE:-/dev/ttyUSB0}:${MODEM_DEVICE:-/dev/huawei-e3272-sms}"
+    volumes:
+      - ./data:/data
+    tmpfs:
+      - /run/sms-gateway:uid=10001,gid=10001,mode=0750,size=16m
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "/opt/sms-gateway/scripts/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

@@ -1,0 +1,15 @@
+**/__pycache__/
+.pytest_cache/
+*.py[cod]
+.env
+*.sqlite3*
+data/gammu/inbox/*
+!data/gammu/inbox/.gitkeep
+data/gammu/outbox/*
+!data/gammu/outbox/.gitkeep
+data/gammu/sent/*
+!data/gammu/sent/.gitkeep
+data/gammu/error/*
+!data/gammu/error/.gitkeep
+data/gammu/processed/*
+!data/gammu/processed/.gitkeep

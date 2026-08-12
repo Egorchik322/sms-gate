@@ -1,0 +1,15 @@
+[gammu]
+port = @MODEM_DEVICE@
+connection = at
+
+[smsd]
+# FILES is the durable ingress spool; gateway processes files asynchronously.
+service = files
+logfile = /dev/stderr
+debuglevel = 0
+receivefrequency = 30
+inboxformat = unicode
+inboxpath = @INBOX_PATH@/
+outboxpath = @OUTBOX_PATH@/
+sentsmspath = @SENT_PATH@/
+errorsmspath = @ERROR_PATH@/
