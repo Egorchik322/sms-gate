@@ -1,6 +1,33 @@
 # SMS Gateway
 
-Домашний SMS-шлюз для Huawei E3272 / MegaFon M100-4. Шлюз принимает SMS через Gammu SMSD, сохраняет их в локальное durable-хранилище, записывает сообщения в SQLite и доставляет уведомления в Telegram и VK через независимые очереди.
+Домашний SMS-шлюз для Huawei E3272 / MegaFon M100-4. Шлюз принимает SMS через Gammu SMSD, сохраняет их в локальном durable-хранилище, записывает сообщения в SQLite и доставляет уведомления в Telegram и VK через независимые очереди.
+
+## Текущее состояние
+
+Проект разворачивается на VM `smsgw01` в каталоге `/workspace/sms-gateway`.
+
+Подтверждено вручную для модема:
+
+```text
+AT+CPIN?  -> +CPIN: READY
+AT+CREG?  -> +CREG: 0,5
+AT+CSQ    -> +CSQ: 18,255
+AT+COPS?  -> оператор t2 rus
+```
+
+`+CREG: 0,5` означает регистрацию в роуминге. Оба `/dev/ttyUSB0` и `/dev/ttyUSB1` отвечали одинаково. Постоянная привязка к номеру `ttyUSB` не используется: resolver выбирает текущий host-порт по физическому USB-пути, udev-атрибутам и номеру интерфейса, а supervisor передаёт его в контейнер как `/dev/huawei-e3272-sms`.
+
+Проверено:
+
+- контейнер запускается с `gammu-smsd` и Python gateway;
+- host-служба `gammu-smsd` отключена, чтобы не конкурировать за AT-порт;
+- SIM успешно принимала SMS;
+- Telegram-доставка проверена в рабочем окружении;
+- VK transport использует фиксированный endpoint и прямой HTTPS без proxy;
+- локальные тесты проходят: `32 passed`;
+- `docker compose config` и Docker build проходят.
+
+GitHub пока **не обновлялся**. Ветка `main` содержит незакоммиченные изменения; `git commit` и `git push` выполняются только после отдельной команды пользователя.
 
 ## Архитектура
 
@@ -16,6 +43,9 @@ Python gateway
     +--> SQLite messages/deliveries
     |
     +--> Telegram через HTTP/HTTPS proxy
+    |       |
+    |       +--> long polling
+    |       +--> inline-кнопки управления
     |
     +--> VK напрямую через https://api.vk.com
 ```
@@ -32,6 +62,26 @@ Python gateway
 - повторные Telegram `update_id` не выполняют команды повторно;
 - управляющие Telegram-команды доступны только whitelist-пользователям и настроенному чату;
 - автоматический reset модема и повторная регистрация отключены.
+
+## Telegram управление
+
+Отправьте боту `/start`, чтобы получить меню inline-кнопок:
+
+```text
+[ Состояние ] [ Полная информация ]
+[ Последние SMS ]
+[ Доставка ] [ Обновить ]
+```
+
+Кнопки используют callback data формата `smsgw:v1:<action>`. Callback query проходят ту же проверку `TELEGRAM_ALLOWED_USER_IDS` и `TELEGRAM_CHAT_ID`, что и текстовые команды. Каждый callback подтверждается через `answerCallbackQuery`, а исходное сообщение обновляется через `editMessageText`.
+
+Кнопка `Состояние` показывает компактный оперативный статус. Кнопка `Полная информация` показывает radio registration, raw `CSQ`, память SIM, счётчики и актуальность snapshot-ов.
+
+Кнопка `Последние SMS` показывает последние сообщения авторизованному пользователю. Текст SMS не записывается в логи приложения.
+
+Кнопка `Доставка` показывает агрегированные статусы Telegram/VK. Кнопка `Обновить` перечитывает актуальные данные из SQLite.
+
+Кнопка повторной регистрации скрыта, когда `MODEM_REREGISTRATION_ENABLED=false`. Даже старый callback этой кнопки безопасно отклоняется; AT-команды для неё не реализованы.
 
 Подробности находятся в [`docs/architecture.md`](docs/architecture.md) и ADR [`docs/adr/0001-files-backend.md`](docs/adr/0001-files-backend.md).
 
@@ -54,7 +104,7 @@ VK используется только для исходящих уведом�
 https://api.vk.com/method/messages.send
 ```
 
-VK не использует proxy. Endpoint нельзя переопределить через `.env`.
+VK не использует proxy. Endpoint нельзя переопределить через `.env`. Параметры VK отправляются в формате `application/x-www-form-urlencoded`; JSON-ошибка API при HTTP 200 не считается успешной доставкой.
 
 ## Требования
 
@@ -83,7 +133,7 @@ chmod 600 .env
 MODEM_DEVICE=/dev/huawei-e3272-sms
 MODEM_HOST_DEVICE=/dev/ttyUSB0
 
-TELEGRAM_BOT_TOKEN=replace-with-real-token
+TELEGRAM_BOT_TOKEN=replace-with-bot-token
 TELEGRAM_CHAT_ID=replace-with-chat-id
 TELEGRAM_ALLOWED_USER_IDS=replace-with-user-id
 
@@ -100,7 +150,7 @@ DIALOUT_GID=20
 GATEWAY_DEVELOPMENT_MODE=false
 ```
 
-`MODEM_HOST_DEVICE` используется Compose для передачи реального host-порта в контейнер. `MODEM_DEVICE` является путём, который видит Gammu внутри контейнера.
+`MODEM_HOST_DEVICE` используется Compose для передачи реального host-порта в контейнер и задаётся supervisorом из результата resolver. `MODEM_DEVICE` является путём, который видит Gammu внутри контейнера.
 
 Не публикуйте `.env`, токены, приватные ключи, OTP или содержимое SMS. Файл `.env` исключён из Git.
 
@@ -110,7 +160,7 @@ GATEWAY_DEVELOPMENT_MODE=false
 2. Отправьте ему `/start`.
 3. Выполните на VM запрос `getUpdates` через настроенный proxy.
 
-Пример безопасного скрипта находится в эксплуатационных инструкциях. Полученный `chat_id` указывается в `TELEGRAM_CHAT_ID`, а ID разрешённых пользователей в `TELEGRAM_ALLOWED_USER_IDS`.
+Полученный `chat_id` указывается в `TELEGRAM_CHAT_ID`, а ID разрешённых пользователей в `TELEGRAM_ALLOWED_USER_IDS`.
 
 ## Получение VK peer ID
 
@@ -212,6 +262,10 @@ sh -n scripts/entrypoint.sh scripts/healthcheck.sh
 - независимые Telegram/VK queues;
 - retry, exponential backoff и `Retry-After`;
 - Telegram whitelist и повторные `update_id`;
+- inline keyboard и callback query;
+- реальные SQLite-ответы кнопок статуса, последних SMS и доставки;
+- callback whitelist, malformed data и edit fallback;
+- Gammu monitor CSV parser;
 - outage/recovery без спама;
 - Telegram proxy policy;
 - прямой VK endpoint и form-encoded API request;
@@ -259,51 +313,6 @@ with sqlite3.connect(path) as db:
 
 Не используйте обычную диагностику с `select text from messages`: body SMS может содержать OTP и персональные данные.
 
-## Файлы проекта
+## Продолжение работы
 
-- `app/` — Python gateway;
-- `migrations/` — SQLite schema;
-- `config/gammu-smsdrc.template` — Gammu FILES configuration;
-- `scripts/entrypoint.sh` — запуск и остановка двух процессов;
-- `scripts/healthcheck.sh` — проверка процессов и SQLite;
-- `compose.yml` — контейнеризация;
-- `tests/` — unit-тесты;
-- `docs/` — архитектура и эксплуатационные инструкции;
-- `data/` — persistent spool, архив и SQLite runtime data.
-
-## Безопасность
-
-Не добавляйте в Git:
-
-- `.env`;
-- Telegram/VK tokens;
-- proxy credentials;
-- private SSH keys;
-- OTP и body SMS;
-- SQLite database и runtime spool.
-
-Не используйте:
-
-```sh
-git add -f .env
-docker compose down -v
-docker system prune
-git push --force
-```
-
-Перед публикацией проверьте:
-
-```sh
-git check-ignore -v .env
-git ls-files .env
-```
-
-`git ls-files .env` не должен выводить ничего.
-
-## Документация
-
-- [Архитектура](docs/architecture.md)
-- [ADR выбора Gammu FILES backend](docs/adr/0001-files-backend.md)
-- [Развёртывание](docs/deployment.md)
-- [Тестирование](docs/testing.md)
-- [Эксплуатация](docs/operations.md)
+Для передачи проекта в новый чат используйте файл [`docs/next-chat-prompt.md`](docs/next-chat-prompt.md). Он содержит ограничения VM, текущую архитектуру, правила работы с секретами и список следующих задач.

@@ -11,6 +11,11 @@ services:
     environment:
       DATABASE_PATH: /data/gateway.sqlite3
       MODEM_DEVICE: ${MODEM_DEVICE:-/dev/huawei-e3272-sms}
+      MODEM_USB_PATH: ${MODEM_USB_PATH:-}
+      MODEM_VENDOR_ID: ${MODEM_VENDOR_ID:-12d1}
+      MODEM_PRODUCT_IDS: ${MODEM_PRODUCT_IDS:-1506}
+      MODEM_INTERFACE_NUM: ${MODEM_INTERFACE_NUM:-00}
+      MODEM_STATUS_CHECK_INTERVAL_SECONDS: ${MODEM_STATUS_CHECK_INTERVAL_SECONDS:-300}
       GAMMU_CONFIG: /opt/sms-gateway/config/gammu-smsdrc
       GAMMU_INBOX_PATH: /data/gammu/inbox
       GAMMU_ARCHIVE_PATH: /data/gammu/processed

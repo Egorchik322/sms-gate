@@ -14,9 +14,23 @@ Gateway не выполняет сетевые запросы в ingress-пут�
 
 Для каждой новой SMS атомарно создаются записи `telegram` и `vk`. Доставка имеет модель at-least-once. При неоднозначном timeout внешнее API может принять запрос, а локальная очередь повторит его после рестарта.
 
-## Каналы
+## Telegram control plane
 
-Telegram является control plane и единственным каналом, который требует proxy: он использует `HTTP_PROXY_URL` и `HTTPS_PROXY_URL`, а без них получает configuration error. Команды разрешены только whitelisted user IDs и настроенному chat ID. `update_id` сохраняется до выполнения команды, поэтому повторный long-poll update не выполняет действие повторно. Команда повторной регистрации присутствует в политике, но выключена по умолчанию и не содержит AT-команды.
+Telegram является control plane и единственным каналом, который требует proxy: он использует `HTTP_PROXY_URL` и `HTTPS_PROXY_URL`, а без них получает configuration error.
+
+Текстовые команды и inline-кнопки используют одну policy:
+
+- `TELEGRAM_ALLOWED_USER_IDS` и `TELEGRAM_CHAT_ID` проверяются до действия;
+- `update_id` сохраняется в `bot_updates` до действия;
+- повторный update не выполняет action повторно;
+- callback data ограничена allowlist-ом `smsgw:v1:<action>`;
+- callback без доступного `message.chat` отклоняется;
+- `answerCallbackQuery` вызывается для разрешённых, запрещённых, неизвестных и повторных callback;
+- принятое действие обновляет исходное сообщение через `editMessageText` и сохраняет inline keyboard;
+- fallback на `sendMessage` выполняется только для определённой ошибки редактирования, чтобы transient timeout не создавал дубль;
+- `Повторить регистрацию` скрыта и отклоняется при `MODEM_REREGISTRATION_ENABLED=false`; AT-команды не реализованы.
+
+## Каналы
 
 VK предусмотрен только как исходящий канал без polling и команд. VK использует прямой HTTPS к фиксированному официальному endpoint `https://api.vk.com/method/messages.send` и намеренно не использует proxy. Это отдельное осознанное исключение из общей proxy-политики.
 

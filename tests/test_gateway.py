@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.config import ConfigurationError, Settings
-from app.control import TelegramControl
+from app.control import CALLBACK_PREFIX, TelegramControl
 from app.delivery import DeliveryResult, DeliveryWorker, RecordingTransport
 from app.http_transports import VK_API_ENDPOINT, VkTransport, classify_http
 from app.ingress import FilesIngress, decode_gammu_text
@@ -16,12 +16,15 @@ from app.store import GatewayStore
 
 
 class FakePoster:
-    def __init__(self, result=None):
-        self.result = result
+    def __init__(self, result=None, results=None):
+        self.result = result or DeliveryResult("sent")
+        self.results = list(results or [])
         self.calls = []
 
     def post(self, url, payload):
         self.calls.append((url, payload))
+        if self.results:
+            return self.results.pop(0)
         return self.result
 
 
@@ -46,6 +49,27 @@ class GatewayTests(unittest.TestCase):
     def count(self, table: str) -> int:
         with self.store.connect() as connection:
             return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+    def telegram_settings(self) -> Settings:
+        return Settings(
+            database_path=self.db,
+            inbox_path=self.inbox,
+            archive_path=self.archive,
+            http_proxy_url="http://proxy.example.invalid:3128",
+            https_proxy_url="http://proxy.example.invalid:3128",
+            telegram_bot_token="fake-token",
+            telegram_chat_id="200",
+            telegram_allowed_user_ids=frozenset({"100"}),
+            vk_token=None,
+            vk_peer_id=None,
+            modem_reregistration_enabled=False,
+            development_mode=True,
+        )
+
+    def make_poller(self, poster: FakePoster | None = None) -> TelegramPoller:
+        settings = self.telegram_settings()
+        control = TelegramControl(self.store, settings.telegram_allowed_user_ids, settings.telegram_chat_id)
+        return TelegramPoller(settings, control, poster=poster or FakePoster())
 
     def test_ingestion_and_unicode_fixtures(self) -> None:
         self.write_sms("IN20260810_000900_00_+15550001001_00.txt", "Test message")
@@ -116,8 +140,106 @@ class GatewayTests(unittest.TestCase):
         control = TelegramControl(self.store, frozenset({"100"}), "200")
         self.assertFalse(control.handle_update(update_id=1, user_id="999", chat_id="200", command="Состояние").accepted)
         self.assertEqual(control.handle_update(update_id=1, user_id="100", chat_id="200", command="Состояние").response, "status")
-        self.assertEqual(control.handle_update(update_id=1, user_id="100", chat_id="200", command="Состояние").response, "Повторный update пропущен")
+        duplicate = control.handle_update(update_id=1, user_id="100", chat_id="200", command="Состояние")
+        self.assertTrue(duplicate.duplicate)
+        self.assertEqual(duplicate.response, "Повторный update пропущен")
         self.assertEqual(control.handle_update(update_id=2, user_id="100", chat_id="200", command="Повторить регистрацию").response, "Повторная регистрация отключена")
+
+    def test_control_renders_real_status_data(self) -> None:
+        self.store.update_modem_status(device_available=True, smsd_running=True, last_contact_at="2026-08-12T22:00:00+00:00", operator_name="test operator", network_code="25099", signal_percent=18, last_received_at="2026-08-12T22:01:00+00:00")
+        control = TelegramControl(self.store, frozenset({"100"}), "200")
+        self.assertIn("test operator", control.render_action("status", "status"))
+        self.assertIn("18", control.render_action("status", "status"))
+
+    def test_control_renders_recent_sms_and_delivery_summary(self) -> None:
+        self.store.ingest_message(source_identifier="source-ui", sender="+15550001011", received_at="2026-08-12T22:02:00+00:00", text="fictional UI SMS")
+        control = TelegramControl(self.store, frozenset({"100"}), "200")
+        self.assertIn("fictional UI SMS", control.render_action("last_sms", "last_sms"))
+        self.assertIn("telegram: pending: 1", control.render_action("delivery", "delivery"))
+        self.assertIn("vk: pending: 1", control.render_action("delivery", "delivery"))
+
+    def test_inline_keyboard_hides_disabled_reregistration(self) -> None:
+        control = TelegramControl(self.store, frozenset({"100"}), "200")
+        markup = control.inline_keyboard()
+        callbacks = [button["callback_data"] for row in markup["inline_keyboard"] for button in row]
+        self.assertIn(CALLBACK_PREFIX + "status", callbacks)
+        self.assertNotIn(CALLBACK_PREFIX + "reregister", callbacks)
+
+    def test_inline_keyboard_includes_enabled_reregistration(self) -> None:
+        control = TelegramControl(self.store, frozenset({"100"}), "200", reregistration_enabled=True)
+        callbacks = [button["callback_data"] for row in control.inline_keyboard()["inline_keyboard"] for button in row]
+        self.assertIn(CALLBACK_PREFIX + "reregister", callbacks)
+
+    def test_callback_success_answers_and_edits_message(self) -> None:
+        poster = FakePoster()
+        poller = self.make_poller(poster)
+        update = {"result": [{"update_id": 20, "callback_query": {"id": "cb-1", "from": {"id": 100}, "message": {"message_id": 55, "chat": {"id": 200}}, "data": CALLBACK_PREFIX + "status"}}]}
+        self.assertEqual(poller.poll_once(lambda method, params: update), 1)
+        self.assertEqual([url.rsplit("/", 1)[-1] for url, _ in poster.calls], ["answerCallbackQuery", "editMessageText"])
+        self.assertEqual(poster.calls[0][1]["callback_query_id"], "cb-1")
+        self.assertEqual(poster.calls[1][1]["chat_id"], "200")
+        self.assertEqual(poster.calls[1][1]["message_id"], 55)
+        self.assertIn("inline_keyboard", poster.calls[1][1]["reply_markup"])
+        self.assertEqual(poller.offset, 21)
+
+    def test_callback_edit_400_falls_back_to_send_message(self) -> None:
+        poster = FakePoster(results=[DeliveryResult("sent"), DeliveryResult("http_400", detail="http_400"), DeliveryResult("sent")])
+        poller = self.make_poller(poster)
+        update = {"result": [{"update_id": 21, "callback_query": {"id": "cb-2", "from": {"id": 100}, "message": {"message_id": 55, "chat": {"id": 200}}, "data": CALLBACK_PREFIX + "delivery"}}]}
+        poller.poll_once(lambda _method, _params: update)
+        self.assertEqual([url.rsplit("/", 1)[-1] for url, _ in poster.calls], ["answerCallbackQuery", "editMessageText", "sendMessage"])
+
+    def test_callback_transient_edit_does_not_duplicate_send(self) -> None:
+        poster = FakePoster(results=[DeliveryResult("sent"), DeliveryResult("transient", detail="network_error")])
+        poller = self.make_poller(poster)
+        update = {"result": [{"update_id": 22, "callback_query": {"id": "cb-3", "from": {"id": 100}, "message": {"message_id": 55, "chat": {"id": 200}}, "data": CALLBACK_PREFIX + "refresh"}}]}
+        poller.poll_once(lambda _method, _params: update)
+        self.assertEqual([url.rsplit("/", 1)[-1] for url, _ in poster.calls], ["answerCallbackQuery", "editMessageText"])
+
+    def test_callback_duplicate_answers_but_does_not_render_twice(self) -> None:
+        poster = FakePoster()
+        poller = self.make_poller(poster)
+        update = {"result": [{"update_id": 23, "callback_query": {"id": "cb-4", "from": {"id": 100}, "message": {"message_id": 55, "chat": {"id": 200}}, "data": CALLBACK_PREFIX + "status"}}]}
+        poller.poll_once(lambda _method, _params: update)
+        duplicate = {"result": [{"update_id": 23, "callback_query": {"id": "cb-5", "from": {"id": 100}, "message": {"message_id": 55, "chat": {"id": 200}}, "data": CALLBACK_PREFIX + "status"}}]}
+        poller.poll_once(lambda _method, _params: duplicate)
+        self.assertEqual([url.rsplit("/", 1)[-1] for url, _ in poster.calls], ["answerCallbackQuery", "editMessageText", "answerCallbackQuery"])
+
+    def test_callback_whitelist_rejects_user_and_chat(self) -> None:
+        poster = FakePoster()
+        poller = self.make_poller(poster)
+        update = {"result": [{"update_id": 24, "callback_query": {"id": "cb-6", "from": {"id": 999}, "message": {"message_id": 55, "chat": {"id": 200}}, "data": CALLBACK_PREFIX + "status"}}]}
+        poller.poll_once(lambda _method, _params: update)
+        self.assertEqual([url.rsplit("/", 1)[-1] for url, _ in poster.calls], ["answerCallbackQuery"])
+        poster.calls.clear()
+        update["result"][0]["update_id"] = 25
+        update["result"][0]["callback_query"]["from"]["id"] = 100
+        update["result"][0]["callback_query"]["message"]["chat"]["id"] = 999
+        poller.poll_once(lambda _method, _params: update)
+        self.assertEqual([url.rsplit("/", 1)[-1] for url, _ in poster.calls], ["answerCallbackQuery"])
+
+    def test_unknown_and_malformed_callbacks_do_not_render(self) -> None:
+        for update_id, data in ((26, "wrong:status"), (27, "smsgw:v1:unknown"), (28, "x" * 65)):
+            poster = FakePoster()
+            poller = self.make_poller(poster)
+            update = {"result": [{"update_id": update_id, "callback_query": {"id": f"cb-{update_id}", "from": {"id": 100}, "message": {"message_id": 55, "chat": {"id": 200}}, "data": data}}]}
+            poller.poll_once(lambda _method, _params: update)
+            self.assertEqual([url.rsplit("/", 1)[-1] for url, _ in poster.calls], ["answerCallbackQuery"])
+
+    def test_callback_without_message_only_answers(self) -> None:
+        poster = FakePoster()
+        poller = self.make_poller(poster)
+        update = {"result": [{"update_id": 29, "callback_query": {"id": "cb-7", "from": {"id": 100}, "inline_message_id": "inline-1", "data": CALLBACK_PREFIX + "status"}}]}
+        poller.poll_once(lambda _method, _params: update)
+        self.assertEqual([url.rsplit("/", 1)[-1] for url, _ in poster.calls], ["answerCallbackQuery"])
+
+    def test_start_sends_menu_with_inline_keyboard(self) -> None:
+        poster = FakePoster()
+        poller = self.make_poller(poster)
+        update = {"result": [{"update_id": 30, "message": {"from": {"id": 100}, "chat": {"id": 200}, "text": "/start"}}]}
+        poller.poll_once(lambda _method, _params: update)
+        self.assertEqual(poster.calls[0][0].rsplit("/", 1)[-1], "sendMessage")
+        self.assertIn("inline_keyboard", poster.calls[0][1]["reply_markup"])
 
     def test_outage_and_recovery_create_one_pair_each(self) -> None:
         unavailable_since = datetime.now(UTC) - timedelta(minutes=6)
@@ -155,14 +277,10 @@ class GatewayTests(unittest.TestCase):
         self.assertNotIn("proxy", poster.calls[0][0].lower())
 
     def test_telegram_polling_uses_saved_update_id_and_fake_reply(self) -> None:
-        settings = Settings(database_path=self.db, inbox_path=self.inbox, archive_path=self.archive, http_proxy_url="http://proxy.example.invalid:3128", https_proxy_url="http://proxy.example.invalid:3128", telegram_bot_token="fake-token", telegram_chat_id="200", telegram_allowed_user_ids=frozenset({"100"}), vk_token=None, vk_peer_id=None, modem_reregistration_enabled=False, development_mode=True)
-        control = TelegramControl(self.store, settings.telegram_allowed_user_ids, settings.telegram_chat_id)
-        poster = FakePoster(DeliveryResult("sent"))
-        poller = TelegramPoller(settings, control, poster=poster)
+        poller = self.make_poller()
         update = {"result": [{"update_id": 9, "message": {"from": {"id": 100}, "chat": {"id": 200}, "text": "Состояние"}}]}
+        self.assertEqual(poller.poll_once(lambda method, params: (self.assertEqual(params["allowed_updates"], ["message", "callback_query"]) or update)), 1)
         self.assertEqual(poller.poll_once(lambda _method, _params: update), 1)
-        self.assertEqual(poller.poll_once(lambda _method, _params: update), 1)
-        self.assertEqual(len(poster.calls), 1)
         self.assertEqual(poller.offset, 10)
 
     def test_logs_do_not_contain_sms_body_or_secrets(self) -> None:

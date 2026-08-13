@@ -1,0 +1,24 @@
+[Unit]
+Description=SMS Gateway modem hotplug supervisor
+Documentation=file:///workspace/sms-gateway/docs/deployment.md
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/workspace/sms-gateway
+ExecStart=/workspace/sms-gateway/scripts/modem-compose-supervisor.sh
+Restart=always
+RestartSec=10
+
+# Resolver settings are hardware metadata, not application secrets.
+Environment=SMS_GATEWAY_PROJECT_DIR=/workspace/sms-gateway
+Environment=MODEM_USB_PATH=pci-0000:02:1b.0-usb-0:1
+Environment=MODEM_VENDOR_ID=12d1
+Environment=MODEM_PRODUCT_IDS=1506
+Environment=MODEM_INTERFACE_NUM=00
+Environment=MODEM_RESOLVE_INTERVAL_SECONDS=5
+
+[Install]
+WantedBy=multi-user.target
