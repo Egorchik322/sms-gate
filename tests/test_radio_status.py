@@ -65,19 +65,12 @@ OK
 
 
 class RadioStorageIntegrationTests(unittest.TestCase):
-    def test_radio_snapshot_and_freshness_are_rendered(self):
+    def test_full_status_hides_unreliable_at_fields(self):
         with tempfile.TemporaryDirectory() as directory:
             store = GatewayStore(Path(directory) / "gateway.sqlite3")
             store.initialize()
-            now = datetime.now(UTC).replace(microsecond=0)
-            timestamp = now.isoformat()
-            store.update_modem_status(
-                device_available=True,
-                smsd_running=True,
-                signal_percent=48,
-                signal_checked_at=timestamp,
-                last_contact_at=timestamp,
-            )
+            now = datetime.now(UTC).replace(microsecond=0).isoformat()
+            store.update_modem_status(device_available=True, smsd_running=True, signal_percent=48, signal_checked_at=now)
             store.update_radio_status(
                 operator_name="t2 rus",
                 network_code=None,
@@ -86,28 +79,19 @@ class RadioStorageIntegrationTests(unittest.TestCase):
                 packet_registration_state="поиск сети (2)",
                 gprs_registration_state="не зарегистрирован (0)",
                 raw_csq=18,
-                checked_at=timestamp,
+                checked_at=now,
             )
-            store.update_sim_storage(
-                name="SM",
-                used=0,
-                capacity=50,
-                free=50,
-                percent=0,
-                checked_at=timestamp,
-            )
+            store.update_sim_storage(name="SM", used=0, capacity=50, free=50, percent=0, checked_at=now)
             rendered = TelegramControl(store, frozenset({"100"}), "200").render_action("full_status", "full_status")
 
         self.assertIn("Сигнал: 48/100", rendered)
-        self.assertIn("Сырой CSQ: 18/31", rendered)
-        self.assertIn("Оператор: t2 rus", rendered)
-        self.assertIn("Технология: UTRAN/3G", rendered)
-        self.assertIn("Регистрация: роуминг (5)", rendered)
-        self.assertIn("Радио:", rendered)
-        self.assertIn("Память SIM:", rendered)
-        self.assertIn("База:", rendered)
+        self.assertIn("Источник статуса: Gammu SMSD shared memory", rendered)
+        self.assertNotIn("t2 rus", rendered)
+        self.assertNotIn("UTRAN/3G", rendered)
+        self.assertNotIn("Сырой CSQ:", rendered)
+        self.assertNotIn("Память SIM", rendered)
 
-    def test_old_snapshot_is_marked_stale(self):
+    def test_old_snapshot_is_not_rendered_as_live_data(self):
         with tempfile.TemporaryDirectory() as directory:
             store = GatewayStore(Path(directory) / "gateway.sqlite3")
             store.initialize()
@@ -115,7 +99,9 @@ class RadioStorageIntegrationTests(unittest.TestCase):
             store.update_modem_status(device_available=True, smsd_running=True, signal_percent=48, signal_checked_at=old)
             rendered = TelegramControl(store, frozenset({"100"}), "200").render_action("full_status", "full_status")
 
-        self.assertIn("устарело", rendered)
+        self.assertIn("Сигнал: 48/100", rendered)
+        self.assertIn("Источник статуса: Gammu SMSD shared memory", rendered)
+        self.assertNotIn("Оператор:", rendered)
 
 
 if __name__ == "__main__":

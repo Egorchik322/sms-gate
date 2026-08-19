@@ -1,10 +1,9 @@
-"""Telegram control-plane policy and safe status rendering."""
+"""Telegram control-plane policy and reliable status rendering."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from .cpms import storage_level
 from .store import GatewayStore, parse_timestamp
 
 
@@ -38,13 +37,7 @@ class TelegramControl:
         "Повторить регистрацию": "reregister",
     }
 
-    def __init__(
-        self,
-        store: GatewayStore,
-        allowed_user_ids: frozenset[str],
-        chat_id: str | None,
-        reregistration_enabled: bool = False,
-    ):
+    def __init__(self, store: GatewayStore, allowed_user_ids: frozenset[str], chat_id: str | None, reregistration_enabled: bool = False):
         self.store = store
         self.allowed_user_ids = allowed_user_ids
         self.chat_id = chat_id
@@ -64,13 +57,7 @@ class TelegramControl:
     def _button(text: str, action: str) -> dict[str, str]:
         return {"text": text, "callback_data": CALLBACK_PREFIX + action}
 
-    def _authorize_and_claim(
-        self,
-        *,
-        update_id: int,
-        user_id: str,
-        chat_id: str,
-    ) -> ControlResult | None:
+    def _authorize_and_claim(self, *, update_id: int, user_id: str, chat_id: str) -> ControlResult | None:
         if chat_id != self.chat_id or user_id not in self.allowed_user_ids:
             return ControlResult(False, "Команда отклонена")
         if not self.store.claim_bot_update(update_id):
@@ -78,53 +65,26 @@ class TelegramControl:
         return None
 
     def _resolve_action(self, action: str) -> ControlResult:
-        if action not in CALLBACK_ACTIONS and action not in {"menu"}:
+        if action not in CALLBACK_ACTIONS and action != "menu":
             return ControlResult(True, "Неизвестная команда")
         if action == "reregister" and not self.reregistration_enabled:
             return ControlResult(True, "Повторная регистрация отключена", action=action)
         return ControlResult(True, action, action=action)
 
-    def handle_update(
-        self,
-        *,
-        update_id: int,
-        user_id: str,
-        chat_id: str,
-        command: str,
-    ) -> ControlResult:
-        rejected = self._authorize_and_claim(
-            update_id=update_id,
-            user_id=user_id,
-            chat_id=chat_id,
-        )
+    def handle_update(self, *, update_id: int, user_id: str, chat_id: str, command: str) -> ControlResult:
+        rejected = self._authorize_and_claim(update_id=update_id, user_id=user_id, chat_id=chat_id)
         if rejected is not None:
             return rejected
         action = self.COMMANDS.get("Меню" if command == "/start" else command)
-        if action is None:
-            return ControlResult(True, "Неизвестная команда")
-        return self._resolve_action(action)
+        return self._resolve_action(action) if action else ControlResult(True, "Неизвестная команда")
 
-    def handle_callback_update(
-        self,
-        *,
-        update_id: int,
-        user_id: str,
-        chat_id: str,
-        callback_data: str | None,
-    ) -> ControlResult:
-        rejected = self._authorize_and_claim(
-            update_id=update_id,
-            user_id=user_id,
-            chat_id=chat_id,
-        )
+    def handle_callback_update(self, *, update_id: int, user_id: str, chat_id: str, callback_data: str | None) -> ControlResult:
+        rejected = self._authorize_and_claim(update_id=update_id, user_id=user_id, chat_id=chat_id)
         if rejected is not None:
             return rejected
-        if not callback_data or len(callback_data.encode("utf-8")) > 64:
+        if not callback_data or len(callback_data.encode("utf-8")) > 64 or not callback_data.startswith(CALLBACK_PREFIX):
             return ControlResult(True, "Неизвестная команда")
-        if not callback_data.startswith(CALLBACK_PREFIX):
-            return ControlResult(True, "Неизвестная команда")
-        action = callback_data[len(CALLBACK_PREFIX):]
-        return self._resolve_action(action)
+        return self._resolve_action(callback_data[len(CALLBACK_PREFIX):])
 
     def render_action(self, action: str | None, fallback: str) -> str:
         if action == "menu":
@@ -144,7 +104,7 @@ class TelegramControl:
         return fallback
 
     @staticmethod
-    def _freshness(timestamp: object, *, stale_after_seconds: int) -> str:
+    def _freshness(timestamp: object, stale_after_seconds: int = 120) -> str:
         if not timestamp:
             return "нет данных"
         try:
@@ -158,91 +118,56 @@ class TelegramControl:
             age_text = f"{age // 60} мин назад"
         else:
             age_text = f"{age // 3600} ч назад"
-        state = "; устарело" if age > stale_after_seconds else ""
-        rendered = checked_at.strftime("%Y-%m-%d %H:%M:%S UTC")
-        return f"{rendered} ({age_text}{state})"
+        stale = "; устарело" if age > stale_after_seconds else ""
+        return f"{checked_at.strftime('%Y-%m-%d %H:%M:%S UTC')} ({age_text}{stale})"
 
     @staticmethod
     def _boolean(value: object) -> str:
-        if value is None:
-            return "нет данных"
-        return "да" if bool(value) else "нет"
+        return "нет данных" if value is None else ("да" if bool(value) else "нет")
 
     @staticmethod
     def _number(value: object) -> str:
         return str(value) if value is not None else "нет данных"
 
-    def _sim_lines(self, row) -> tuple[str, ...]:
-        sim_used = row["sim_storage_used"]
-        sim_capacity = row["sim_storage_capacity"]
-        sim_free = row["sim_storage_free"]
-        sim_percent = row["sim_storage_percent"]
-        sim_name = row["sim_storage_name"] or "SM"
-        if sim_used is None or sim_capacity is None:
-            return (
-                "Память SIM: нет данных",
-                "Свободно SIM: нет данных",
-            )
-        return (
-            f"Память SIM ({sim_name}): {sim_used}/{sim_capacity}",
-            f"Свободно SIM: {self._number(sim_free)}",
-        )
+    def _reliable_lines(self, row) -> list[str]:
+        signal = row["signal_percent"]
+        return [
+            f"Устройство: {self._boolean(row['device_available'])}",
+            f"Gammu SMSD: {self._boolean(row['smsd_running'])}",
+            f"Сигнал: {signal}/100" if signal is not None else "Сигнал: нет данных",
+            f"Последняя SMS: {row['last_received_at'] or 'нет данных'}",
+            f"SMS принято: {self._number(row['received_count'])}",
+            f"SMS отправлено: {self._number(row['sent_count'])}",
+        ]
 
     def _render_compact_status(self) -> str:
         row = self.store.modem_status_snapshot()
         if row is None:
             return "Состояние шлюза\n\nСтатус ещё не получен."
-        signal_percent = row["signal_percent"]
-        signal_text = f"{signal_percent}/100" if signal_percent is not None else "нет данных"
-        lines = [
+        return "\n".join([
             "Состояние шлюза",
             "",
-            f"Устройство: {self._boolean(row['device_available'])}",
-            f"Gammu SMSD: {self._boolean(row['smsd_running'])}",
-            f"Оператор: {row['operator_name'] or 'нет данных'}",
-            f"Сигнал: {signal_text}",
-            *self._sim_lines(row),
-            f"Последняя SMS: {row['last_received_at'] or 'нет данных'}",
-            f"SMS принято: {self._number(row['received_count'])}",
-            f"SMS отправлено: {self._number(row['sent_count'])}",
-            f"Обновлено: {self._freshness(row['updated_at'], stale_after_seconds=120)}",
-        ]
-        return "\n".join(lines)
+            *self._reliable_lines(row),
+            f"Обновлено: {self._freshness(row['signal_checked_at'] or row['updated_at'])}",
+        ])
 
     def _render_full_status(self) -> str:
         row = self.store.modem_status_snapshot()
         if row is None:
             return "Полная информация\n\nСтатус ещё не получен."
-
-        signal_percent = row["signal_percent"]
-        signal_text = f"{signal_percent}/100" if signal_percent is not None else "нет данных"
-        raw_csq = row["raw_csq"]
-        raw_csq_text = f"{raw_csq}/31" if raw_csq is not None else "нет данных"
-        lines = [
+        return "\n".join([
             "Полная информация",
             "",
-            f"Устройство: {self._boolean(row['device_available'])}",
-            f"Gammu SMSD: {self._boolean(row['smsd_running'])}",
-            f"Оператор: {row['operator_name'] or 'нет данных'}",
-            f"Технология: {row['radio_access_technology'] or 'нет данных'}",
-            f"Регистрация: {row['registration_state'] or 'нет данных'}",
-            f"Пакетная регистрация: {row['packet_registration_state'] or 'нет данных'}",
-            f"GPRS регистрация: {row['gprs_registration_state'] or 'нет данных'}",
-            f"Сигнал: {signal_text}",
-            f"Сырой CSQ: {raw_csq_text}",
-            *self._sim_lines(row),
-            f"Заполнение SIM: {self._number(row['sim_storage_percent'])}% ({storage_level(row['sim_storage_percent'])})",
-            f"Последняя SMS: {row['last_received_at'] or 'нет данных'}",
-            f"SMS принято: {self._number(row['received_count'])}",
-            f"SMS отправлено: {self._number(row['sent_count'])}",
+            *self._reliable_lines(row),
+            "",
+            "Источник статуса: Gammu SMSD shared memory",
+            "Serial-порт не открывается вторым клиентом",
+            "Оператор, технология, raw CSQ и память SIM не входят в shared-memory status Gammu 1.42.",
             "",
             "Актуальность:",
-            f"Gammu: {self._freshness(row['signal_checked_at'], stale_after_seconds=120)}",
-            f"Радио: {self._freshness(row['radio_checked_at'], stale_after_seconds=600)}",
-            f"Память SIM: {self._freshness(row['sim_storage_checked_at'], stale_after_seconds=600)}",
-            f"База: {self._freshness(row['updated_at'], stale_after_seconds=120)}",
-        ]
-        return "\n".join(lines)
+            f"Gammu: {self._freshness(row['signal_checked_at'], 120)}",
+            f"База: {self._freshness(row['updated_at'], 120)}",
+        ])
 
     def _render_last_sms(self) -> str:
         rows = self.store.recent_messages(5)

@@ -13,7 +13,6 @@ sed \
   -e "s|@ERROR_PATH@|${GAMMU_ERROR_PATH:-/data/gammu/error}|g" \
   config/gammu-smsdrc.template > "$config_file"
 
-# Child processes must use the generated runtime config, not the source template.
 export GAMMU_CONFIG="$config_file"
 
 mkdir -p "${GAMMU_INBOX_PATH:-/data/gammu/inbox}" "${GAMMU_OUTBOX_PATH:-/data/gammu/outbox}" \
@@ -28,6 +27,13 @@ gammu_pid=''
 restart_delay=${GAMMU_RESTART_DELAY_SECONDS:-10}
 stopping=false
 
+pid_is_running() {
+  pid=$1
+  [ -r "/proc/$pid/stat" ] || return 1
+  state=$(cut -d' ' -f3 "/proc/$pid/stat" 2>/dev/null || true)
+  [ "$state" != Z ] && [ "$state" != X ]
+}
+
 start_gammu() {
   rm -f "$runtime_dir/gammu-smsd.pid" "$runtime_dir/gammu-smsd.proc"
   gammu-smsd --config "$config_file" --pid "$runtime_dir/gammu-smsd.pid" &
@@ -37,15 +43,24 @@ start_gammu() {
 
 terminate() {
   stopping=true
-  kill -TERM "$gateway_pid" 2>/dev/null || true
-  if [ -n "$gammu_pid" ]; then
+  if pid_is_running "$gateway_pid"; then
+    kill -TERM "$gateway_pid" 2>/dev/null || true
+  fi
+  if [ -n "$gammu_pid" ] && pid_is_running "$gammu_pid"; then
     kill -TERM "$gammu_pid" 2>/dev/null || true
   fi
 }
 trap terminate TERM INT
 
-while kill -0 "$gateway_pid" 2>/dev/null && [ "$stopping" = false ]; do
-  if [ -z "$gammu_pid" ] || ! kill -0 "$gammu_pid" 2>/dev/null; then
+while [ "$stopping" = false ]; do
+  if ! pid_is_running "$gateway_pid"; then
+    terminate
+    wait "$gateway_pid" 2>/dev/null || true
+    [ -z "$gammu_pid" ] || wait "$gammu_pid" 2>/dev/null || true
+    exit 1
+  fi
+
+  if [ -z "$gammu_pid" ] || ! pid_is_running "$gammu_pid"; then
     if [ -n "$gammu_pid" ]; then
       wait "$gammu_pid" 2>/dev/null || true
     fi
@@ -56,9 +71,6 @@ while kill -0 "$gateway_pid" 2>/dev/null && [ "$stopping" = false ]; do
   sleep "$restart_delay"
 done
 
-terminate
 wait "$gateway_pid" 2>/dev/null || true
-if [ -n "$gammu_pid" ]; then
-  wait "$gammu_pid" 2>/dev/null || true
-fi
-exit 1
+[ -z "$gammu_pid" ] || wait "$gammu_pid" 2>/dev/null || true
+exit 0

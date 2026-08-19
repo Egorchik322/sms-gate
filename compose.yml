@@ -16,6 +16,7 @@ services:
       MODEM_PRODUCT_IDS: ${MODEM_PRODUCT_IDS:-1506}
       MODEM_INTERFACE_NUM: ${MODEM_INTERFACE_NUM:-00}
       MODEM_STATUS_CHECK_INTERVAL_SECONDS: ${MODEM_STATUS_CHECK_INTERVAL_SECONDS:-300}
+      MODEM_STATUS_AT_ENABLED: ${MODEM_STATUS_AT_ENABLED:-false}
       GAMMU_CONFIG: /opt/sms-gateway/config/gammu-smsdrc
       GAMMU_INBOX_PATH: /data/gammu/inbox
       GAMMU_ARCHIVE_PATH: /data/gammu/processed
@@ -30,7 +31,7 @@ services:
       GATEWAY_DEVELOPMENT_MODE: ${GATEWAY_DEVELOPMENT_MODE:-false}
     devices:
       # Docker must receive the real host tty, not a host symlink mapped to itself.
-      - "${MODEM_HOST_DEVICE:-/dev/ttyUSB0}:${MODEM_DEVICE:-/dev/huawei-e3272-sms}"
+      - "${MODEM_HOST_DEVICE:-/dev/huawei-e3272-sms}:${MODEM_DEVICE:-/dev/huawei-e3272-sms}"
     volumes:
       - ./data:/data
     tmpfs:

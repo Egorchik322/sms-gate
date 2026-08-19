@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.control import CALLBACK_PREFIX, TelegramControl
@@ -11,13 +12,15 @@ class CompactStatusTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         store = GatewayStore(Path(self.temp.name) / "gateway.sqlite3")
         store.initialize()
+        now = datetime.now(UTC).replace(microsecond=0).isoformat()
         store.update_modem_status(
             device_available=True,
             smsd_running=True,
-            operator_name="t2 rus",
             signal_percent=48,
-            signal_checked_at="2026-08-13T16:00:00+00:00",
-            last_contact_at="2026-08-13T16:00:00+00:00",
+            signal_checked_at=now,
+            last_contact_at=now,
+            received_count=3,
+            sent_count=2,
         )
         return store, TelegramControl(store, frozenset({"100"}), "200")
 
@@ -25,13 +28,16 @@ class CompactStatusTests(unittest.TestCase):
         if hasattr(self, "temp"):
             self.temp.cleanup()
 
-    def test_compact_status_hides_extended_diagnostics(self):
+    def test_compact_status_contains_only_live_monitor_fields(self):
         _store, control = self.make_control()
         rendered = control.render_action("status", "status")
-        self.assertIn("Оператор: t2 rus", rendered)
+        self.assertIn("Устройство: да", rendered)
+        self.assertIn("Gammu SMSD: да", rendered)
         self.assertIn("Сигнал: 48/100", rendered)
+        self.assertIn("SMS принято: 3", rendered)
+        self.assertNotIn("Оператор:", rendered)
         self.assertNotIn("Сырой CSQ", rendered)
-        self.assertNotIn("Регистрация:", rendered)
+        self.assertNotIn("Память SIM", rendered)
         self.assertNotIn("Актуальность:", rendered)
 
     def test_full_status_button_and_callback(self):
@@ -46,22 +52,16 @@ class CompactStatusTests(unittest.TestCase):
         )
         self.assertEqual(result.action, "full_status")
 
-    def test_full_status_contains_extended_diagnostics(self):
-        store, control = self.make_control()
-        store.update_radio_status(
-            operator_name="t2 rus",
-            network_code=None,
-            access_technology="UTRAN/3G",
-            registration_state="роуминг (5)",
-            packet_registration_state="поиск сети (2)",
-            gprs_registration_state="не зарегистрирован (0)",
-            raw_csq=18,
-            checked_at="2026-08-13T16:00:00+00:00",
-        )
+    def test_full_status_explains_disabled_at_details(self):
+        _store, control = self.make_control()
         rendered = control.render_action("full_status", "full_status")
-        self.assertIn("Сырой CSQ: 18/31", rendered)
-        self.assertIn("Регистрация: роуминг (5)", rendered)
-        self.assertIn("Актуальность:", rendered)
+        self.assertIn("Сигнал: 48/100", rendered)
+        self.assertIn("Источник статуса: Gammu SMSD shared memory", rendered)
+        self.assertIn("Gammu SMSD shared memory", rendered)
+        self.assertNotIn("Оператор:", rendered)
+        self.assertNotIn("Сырой CSQ", rendered)
+        self.assertNotIn("Регистрация:", rendered)
+        self.assertNotIn("Память SIM", rendered)
 
 
 if __name__ == "__main__":

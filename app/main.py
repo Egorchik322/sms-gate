@@ -13,6 +13,7 @@ from .config import ConfigurationError, Settings
 from .control import TelegramControl
 from .cpms import read_modem_snapshot
 from .delivery import DeliveryWorker
+from .gammu_shared_status import read_shared_status
 from .gammu_status import read_gammu_status
 from .http_transports import ProxyJsonPoster, TelegramTransport, VkTransport
 from .ingress import FilesIngress
@@ -109,6 +110,7 @@ def run(settings: Settings, *, once: bool = False, interval: int = 15) -> None:
         60,
         int(os.environ.get("MODEM_STATUS_CHECK_INTERVAL_SECONDS", DEFAULT_MODEM_STATUS_INTERVAL)),
     )
+    at_snapshot_enabled = os.environ.get("MODEM_STATUS_AT_ENABLED", "false").lower() == "true"
     next_modem_status_check = time.monotonic() + min(30, modem_status_interval)
 
     while not STOP:
@@ -124,20 +126,47 @@ def run(settings: Settings, *, once: bool = False, interval: int = 15) -> None:
 
         device_available = Path(modem_device).exists()
         smsd_running = process_is_running("/run/sms-gateway/gammu-smsd.proc")
-        gammu_status = read_gammu_status(monitor_config) if smsd_running else None
+        shared_status = read_shared_status(monitor_config) if smsd_running else None
+        monitor_status = read_gammu_status(monitor_config) if smsd_running and shared_status is None else None
+
+        if shared_status is not None:
+            signal_percent = shared_status.signal_percent
+            sent_count = shared_status.sent
+            received_count = shared_status.received
+            failed_count = shared_status.failed
+            operator_name = shared_status.network_name
+            network_code = shared_status.network_code
+            checked_at = shared_status.checked_at
+        else:
+            signal_percent = monitor_status.signal_percent if monitor_status else None
+            sent_count = monitor_status.sent if monitor_status else None
+            received_count = monitor_status.received if monitor_status else None
+            failed_count = monitor_status.failed if monitor_status else None
+            operator_name = None
+            network_code = None
+            checked_at = monitor_status.checked_at if monitor_status else None
+
         store.update_modem_status(
             device_available=device_available,
             smsd_running=smsd_running,
-            last_contact_at=gammu_status.checked_at if gammu_status else None,
-            signal_percent=gammu_status.signal_percent if gammu_status else None,
-            signal_checked_at=gammu_status.checked_at if gammu_status else None,
-            sent_count=gammu_status.sent if gammu_status else None,
-            received_count=gammu_status.received if gammu_status else None,
-            failed_count=gammu_status.failed if gammu_status else None,
+            last_contact_at=checked_at,
+            operator_name=operator_name,
+            network_code=network_code,
+            signal_percent=signal_percent,
+            signal_checked_at=checked_at,
+            sent_count=sent_count,
+            received_count=received_count,
+            failed_count=failed_count,
             last_received_at=latest_received_at(store),
         )
 
-        if not once and device_available and smsd_running and time.monotonic() >= next_modem_status_check:
+        if (
+            not once
+            and at_snapshot_enabled
+            and device_available
+            and smsd_running
+            and time.monotonic() >= next_modem_status_check
+        ):
             snapshot = read_modem_snapshot(modem_device)
             next_modem_status_check = time.monotonic() + modem_status_interval
             if snapshot.radio is None:
@@ -154,13 +183,6 @@ def run(settings: Settings, *, once: bool = False, interval: int = 15) -> None:
                     raw_csq=radio.raw_csq,
                     checked_at=radio.checked_at or datetime.now(UTC).replace(microsecond=0).isoformat(),
                 )
-                LOGGER.info(
-                    "radio status checked operator=%s technology=%s registration=%s raw_csq=%s",
-                    radio.operator_name or "unknown",
-                    radio.access_technology or "unknown",
-                    radio.registration_state or "unknown",
-                    radio.raw_csq if radio.raw_csq is not None else "unknown",
-                )
             if snapshot.sim_storage is None:
                 LOGGER.warning("sim storage check failed class=cpms_unavailable")
             else:
@@ -172,14 +194,6 @@ def run(settings: Settings, *, once: bool = False, interval: int = 15) -> None:
                     free=sim.free,
                     percent=sim.percent,
                     checked_at=sim.checked_at or datetime.now(UTC).replace(microsecond=0).isoformat(),
-                )
-                LOGGER.info(
-                    "sim storage checked name=%s used=%s capacity=%s free=%s percent=%s",
-                    sim.name,
-                    sim.used,
-                    sim.capacity,
-                    sim.free,
-                    sim.percent,
                 )
 
         if device_available and smsd_running:

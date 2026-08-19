@@ -3,7 +3,7 @@ FROM debian:12-slim
 
 ARG DIALOUT_GID=20
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 gammu-smsd ca-certificates \
+    && apt-get install -y --no-install-recommends python3 python3-gammu gammu gammu-smsd ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid ${DIALOUT_GID} serialhost || true \
     && groupadd --system --gid 10001 gateway \

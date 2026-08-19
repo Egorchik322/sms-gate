@@ -1,10 +1,17 @@
 #!/bin/sh
 set -eu
+
 runtime_dir=/run/sms-gateway
-for proc_file in "$runtime_dir/gateway.proc"; do
-  test -s "$proc_file" || exit 1
-  kill -0 "$(cat "$proc_file")" 2>/dev/null || exit 1
-done
+proc_file="$runtime_dir/gateway.proc"
+test -s "$proc_file"
+pid=$(cat "$proc_file")
+test "$pid" -gt 1
+stat_file="/proc/$pid/stat"
+test -r "$stat_file"
+state=$(cut -d' ' -f3 "$stat_file")
+test "$state" != Z
+test "$state" != X
+
 python3 - <<'PY'
 import os
 import sqlite3

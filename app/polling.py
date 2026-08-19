@@ -1,6 +1,7 @@
 """Telegram long polling through the mandatory proxy."""
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import urllib.error
@@ -118,9 +119,9 @@ class TelegramPoller:
         try:
             with urllib.request.build_opener(urllib.request.ProxyHandler(proxy)).open(request, timeout=35) as response:
                 return json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError) as error:
-            LOGGER.warning("telegram polling failed class=network_error")
-            return {"ok": False, "result": [], "error": str(type(error).__name__)}
+        except (urllib.error.URLError, http.client.RemoteDisconnected, ConnectionError, TimeoutError, OSError, json.JSONDecodeError) as error:
+            LOGGER.warning("telegram polling failed class=network_error error=%s", type(error).__name__)
+            return {"ok": False, "result": [], "error": type(error).__name__}
 
     def _send_reply(
         self,

@@ -146,9 +146,11 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(control.handle_update(update_id=2, user_id="100", chat_id="200", command="Повторить регистрацию").response, "Повторная регистрация отключена")
 
     def test_control_renders_real_status_data(self) -> None:
-        self.store.update_modem_status(device_available=True, smsd_running=True, last_contact_at="2026-08-12T22:00:00+00:00", operator_name="test operator", network_code="25099", signal_percent=18, last_received_at="2026-08-12T22:01:00+00:00")
+        now = datetime.now(UTC).replace(microsecond=0).isoformat()
+        self.store.update_modem_status(device_available=True, smsd_running=True, last_contact_at=now, operator_name="test operator", network_code="25099", signal_percent=18, signal_checked_at=now, last_received_at=now)
+        self.store.update_radio_status(operator_name="test operator", network_code="25099", access_technology="UTRAN/3G", registration_state="роуминг (5)", packet_registration_state="поиск сети (2)", gprs_registration_state="не зарегистрирован (0)", raw_csq=18, checked_at=now)
         control = TelegramControl(self.store, frozenset({"100"}), "200")
-        self.assertIn("test operator", control.render_action("status", "status"))
+        self.assertNotIn("test operator", control.render_action("status", "status"))
         self.assertIn("18", control.render_action("status", "status"))
 
     def test_control_renders_recent_sms_and_delivery_summary(self) -> None:

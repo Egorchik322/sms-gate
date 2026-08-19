@@ -1,6 +1,7 @@
 """Read-only modem snapshots through a controlled Gammu pause."""
 from __future__ import annotations
 
+import errno
 import os
 import re
 import select
@@ -102,6 +103,8 @@ def parse_radio_response(output: str) -> RadioStatus | None:
     if cops_match:
         format_code = int(cops_match.group(2))
         operator_name = (cops_match.group(3) or cops_match.group(4) or "").strip() or None
+        if format_code == 2 and operator_name:
+            network_code = operator_name
         access_code = cops_match.group(5)
         if access_code is not None:
             access_technology = _ACCESS_TECHNOLOGIES.get(int(access_code), f"код {access_code}")
@@ -178,8 +181,19 @@ def _configure_serial(fd: int) -> None:
     termios.tcflush(fd, termios.TCIOFLUSH)
 
 
+def _open_serial(device_path: str | Path, timeout: float) -> int:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return os.open(device_path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        except OSError as error:
+            if error.errno != errno.EBUSY or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
+
+
 def query_commands(device_path: str | Path, commands: tuple[str, ...], timeout: float = 5.0) -> dict[str, str]:
-    fd = os.open(device_path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    fd = _open_serial(device_path, max(3.0, timeout))
     try:
         _configure_serial(fd)
         responses = {}
