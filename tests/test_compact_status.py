@@ -52,16 +52,15 @@ class CompactStatusTests(unittest.TestCase):
         )
         self.assertEqual(result.action, "full_status")
 
-    def test_full_status_explains_disabled_at_details(self):
+    def test_full_status_contains_shared_memory_source(self):
         _store, control = self.make_control()
         rendered = control.render_action("full_status", "full_status")
         self.assertIn("Сигнал: 48/100", rendered)
-        self.assertIn("Источник статуса: Gammu SMSD shared memory", rendered)
-        self.assertIn("Gammu SMSD shared memory", rendered)
-        self.assertNotIn("Оператор:", rendered)
+        self.assertIn("Источник: Gammu SMSD shared memory + C-helper", rendered)
+        self.assertIn("Оператор: нет данных", rendered)
+        self.assertIn("Регистрация: нет данных", rendered)
+        self.assertIn("Память SIM: нет данных", rendered)
         self.assertNotIn("Сырой CSQ", rendered)
-        self.assertNotIn("Регистрация:", rendered)
-        self.assertNotIn("Память SIM", rendered)
 
 
 if __name__ == "__main__":

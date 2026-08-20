@@ -155,19 +155,41 @@ class TelegramControl:
         row = self.store.modem_status_snapshot()
         if row is None:
             return "Полная информация\n\nСтатус ещё не получен."
-        return "\n".join([
+        signal = row["signal_percent"]
+        signal_text = f"{signal}/100" if signal is not None else "нет данных"
+        dbm = row["signal_dbm"]
+        ber = row["signal_bit_error_percent"]
+        lines = [
             "Полная информация",
             "",
-            *self._reliable_lines(row),
+            f"Устройство: {self._boolean(row['device_available'])}",
+            f"Gammu SMSD: {self._boolean(row['smsd_running'])}",
+            f"Оператор: {row['operator_name'] or 'нет данных'}",
+            f"Код сети: {row['network_code'] or 'нет данных'}",
+            f"Регистрация: {row['registration_state'] or 'нет данных'}",
+            f"Сигнал: {signal_text}",
+            f"Сигнал dBm: {self._number(dbm)}",
+            f"BER: {self._number(ber)}%",
+            f"LAC: {row['network_lac'] or 'нет данных'}",
+            f"CID: {row['network_cid'] or 'нет данных'}",
+            f"GPRS: {row['gprs_state'] or 'нет данных'}",
+            f"Packet: {row['packet_state'] or 'нет данных'}",
+            f"Packet LAC: {row['packet_lac'] or 'нет данных'}",
+            f"Packet CID: {row['packet_cid'] or 'нет данных'}",
+            f"Последняя SMS: {row['last_received_at'] or 'нет данных'}",
+            f"SMS принято: {self._number(row['received_count'])}",
+            f"SMS отправлено: {self._number(row['sent_count'])}",
             "",
-            "Источник статуса: Gammu SMSD shared memory",
+            "Источник: Gammu SMSD shared memory + C-helper",
             "Serial-порт не открывается вторым клиентом",
-            "Оператор, технология, raw CSQ и память SIM не входят в shared-memory status Gammu 1.42.",
             "",
             "Актуальность:",
             f"Gammu: {self._freshness(row['signal_checked_at'], 120)}",
+            f"Радио: {self._freshness(row['radio_checked_at'], 600)}",
+            f"Память SIM: {self._freshness(row['sim_storage_checked_at'], 600)}",
             f"База: {self._freshness(row['updated_at'], 120)}",
-        ])
+        ]
+        return "\n".join(lines)
 
     def _render_last_sms(self) -> str:
         rows = self.store.recent_messages(5)

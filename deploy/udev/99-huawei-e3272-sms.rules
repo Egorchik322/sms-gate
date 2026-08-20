@@ -1,0 +1,3 @@
+# Huawei E3272 AT interface. Physical USB path is intentionally not fixed:
+# ttyUSB numbering and USB topology may change after replug or moving ports.
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="12d1", ENV{ID_MODEL_ID}=="1506", ENV{ID_USB_INTERFACE_NUM}=="00", ENV{ID_USB_DRIVER}=="option", SYMLINK+="huawei-e3272-sms", GROUP="dialout", MODE="0660"

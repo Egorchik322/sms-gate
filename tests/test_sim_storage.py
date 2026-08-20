@@ -8,7 +8,7 @@ from app.store import GatewayStore
 
 
 class SimStorageIntegrationTests(unittest.TestCase):
-    def test_snapshot_is_stored_but_not_rendered_in_telegram(self):
+    def test_snapshot_is_stored_and_freshness_is_rendered(self):
         with tempfile.TemporaryDirectory() as directory:
             store = GatewayStore(Path(directory) / "gateway.sqlite3")
             store.initialize()
@@ -22,9 +22,8 @@ class SimStorageIntegrationTests(unittest.TestCase):
         self.assertEqual(row["sim_storage_capacity"], 50)
         self.assertEqual(row["sim_storage_free"], 0)
         self.assertEqual(row["sim_storage_percent"], 100)
-        self.assertIn("Источник статуса: Gammu SMSD shared memory", rendered)
-        self.assertNotIn("Память SIM (SM):", rendered)
-        self.assertNotIn("Заполнение SIM: 100%", rendered)
+        self.assertIn("Источник: Gammu SMSD shared memory + C-helper", rendered)
+        self.assertIn("Память SIM: 2026-", rendered)
 
     def test_status_without_snapshot_is_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -33,8 +32,8 @@ class SimStorageIntegrationTests(unittest.TestCase):
             store.update_modem_status(device_available=True, smsd_running=True)
             rendered = TelegramControl(store, frozenset({"100"}), "200").render_action("full_status", "full_status")
 
-        self.assertIn("Источник статуса: Gammu SMSD shared memory", rendered)
-        self.assertNotIn("Память SIM", rendered)
+        self.assertIn("Источник: Gammu SMSD shared memory + C-helper", rendered)
+        self.assertIn("Память SIM: нет данных", rendered)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,14 @@ class GatewayStore:
                 "sent_count": "INTEGER",
                 "received_count": "INTEGER",
                 "failed_count": "INTEGER",
+                "network_lac": "TEXT",
+                "network_cid": "TEXT",
+                "gprs_state": "TEXT",
+                "packet_state": "TEXT",
+                "packet_lac": "TEXT",
+                "packet_cid": "TEXT",
+                "signal_dbm": "INTEGER",
+                "signal_bit_error_percent": "INTEGER",
                 "radio_access_technology": "TEXT",
                 "registration_state": "TEXT",
                 "packet_registration_state": "TEXT",
@@ -174,7 +182,8 @@ class GatewayStore:
                 SELECT device_available, smsd_running, operator_name, network_code,
                        radio_access_technology, registration_state,
                        packet_registration_state, gprs_registration_state, raw_csq,
-                       radio_checked_at, signal_percent, signal_checked_at,
+                       network_lac, network_cid, gprs_state, packet_state, packet_lac, packet_cid,
+                       radio_checked_at, signal_percent, signal_dbm, signal_bit_error_percent, signal_checked_at,
                        sent_count, received_count, failed_count,
                        sim_storage_name, sim_storage_used, sim_storage_capacity,
                        sim_storage_free, sim_storage_percent, sim_storage_checked_at,
@@ -240,6 +249,66 @@ class GatewayStore:
                     updated_at=excluded.updated_at
                 """,
                 (device_available, smsd_running, last_contact_at, operator_name, network_code, signal_percent, signal_checked_at, sent_count, received_count, failed_count, last_received_at, now),
+            )
+
+    def update_c_status(
+        self,
+        *,
+        signal_percent: int | None,
+        signal_dbm: int | None,
+        bit_error_percent: int | None,
+        sent: int | None,
+        received: int | None,
+        failed: int | None,
+        network_name: str | None,
+        network_code: str | None,
+        network_state: str | None,
+        lac: str | None,
+        cid: str | None,
+        gprs_state: str | None,
+        packet_state: str | None,
+        packet_lac: str | None,
+        packet_cid: str | None,
+        checked_at: str,
+    ) -> None:
+        now = utcnow()
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO modem_status (
+                    singleton, device_available, smsd_running,
+                    operator_name, network_code, registration_state,
+                    network_lac, network_cid, gprs_state, packet_state,
+                    packet_lac, packet_cid, signal_percent, signal_dbm,
+                    signal_bit_error_percent, sent_count, received_count,
+                    failed_count, signal_checked_at, radio_checked_at, updated_at
+                ) VALUES (1, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(singleton) DO UPDATE SET
+                    operator_name=excluded.operator_name,
+                    network_code=excluded.network_code,
+                    registration_state=excluded.registration_state,
+                    network_lac=excluded.network_lac,
+                    network_cid=excluded.network_cid,
+                    gprs_state=excluded.gprs_state,
+                    packet_state=excluded.packet_state,
+                    packet_lac=excluded.packet_lac,
+                    packet_cid=excluded.packet_cid,
+                    signal_percent=excluded.signal_percent,
+                    signal_dbm=excluded.signal_dbm,
+                    signal_bit_error_percent=excluded.signal_bit_error_percent,
+                    sent_count=excluded.sent_count,
+                    received_count=excluded.received_count,
+                    failed_count=excluded.failed_count,
+                    signal_checked_at=excluded.signal_checked_at,
+                    radio_checked_at=excluded.radio_checked_at,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    network_name, network_code, network_state, lac, cid,
+                    gprs_state, packet_state, packet_lac, packet_cid,
+                    signal_percent, signal_dbm, bit_error_percent,
+                    sent, received, failed, checked_at, checked_at, now,
+                ),
             )
 
     def update_radio_status(self, *, operator_name: str | None, network_code: str | None, access_technology: str | None, registration_state: str | None, packet_registration_state: str | None, gprs_registration_state: str | None, raw_csq: int | None, checked_at: str) -> None:

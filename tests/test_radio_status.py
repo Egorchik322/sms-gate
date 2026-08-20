@@ -85,11 +85,11 @@ class RadioStorageIntegrationTests(unittest.TestCase):
             rendered = TelegramControl(store, frozenset({"100"}), "200").render_action("full_status", "full_status")
 
         self.assertIn("Сигнал: 48/100", rendered)
-        self.assertIn("Источник статуса: Gammu SMSD shared memory", rendered)
-        self.assertNotIn("t2 rus", rendered)
+        self.assertIn("Источник: Gammu SMSD shared memory + C-helper", rendered)
+        self.assertIn("t2 rus", rendered)
         self.assertNotIn("UTRAN/3G", rendered)
         self.assertNotIn("Сырой CSQ:", rendered)
-        self.assertNotIn("Память SIM", rendered)
+        self.assertIn("Память SIM:", rendered)
 
     def test_old_snapshot_is_not_rendered_as_live_data(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -100,8 +100,8 @@ class RadioStorageIntegrationTests(unittest.TestCase):
             rendered = TelegramControl(store, frozenset({"100"}), "200").render_action("full_status", "full_status")
 
         self.assertIn("Сигнал: 48/100", rendered)
-        self.assertIn("Источник статуса: Gammu SMSD shared memory", rendered)
-        self.assertNotIn("Оператор:", rendered)
+        self.assertIn("Источник: Gammu SMSD shared memory + C-helper", rendered)
+        self.assertIn("Оператор: нет данных", rendered)
 
 
 if __name__ == "__main__":
